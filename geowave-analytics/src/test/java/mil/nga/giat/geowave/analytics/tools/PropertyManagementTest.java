@@ -5,6 +5,10 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -19,6 +23,7 @@ import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
+import org.apache.commons.io.output.ByteArrayOutputStream;
 import org.junit.Test;
 
 public class PropertyManagementTest
@@ -64,7 +69,9 @@ public class PropertyManagementTest
 	}
 
 	@Test
-	public void testStore() {
+	public void testStore()
+			throws IOException,
+			ClassNotFoundException {
 		PropertyManagement pm = new PropertyManagement();
 		pm.store(
 				new ParameterEnum[] {
@@ -76,6 +83,21 @@ public class PropertyManagementTest
 		assertEquals(
 				"bar",
 				pm.getProperty(ExtractParameters.Extract.ADAPTER_ID));
+
+		ByteArrayOutputStream bos = new ByteArrayOutputStream();
+		ObjectOutputStream os = new ObjectOutputStream(
+				bos);
+		os.writeObject(pm);
+		os.close();
+		ByteArrayInputStream bis = new ByteArrayInputStream(
+				bos.toByteArray());
+		ObjectInputStream is = new ObjectInputStream(
+				bis);
+		PropertyManagement pm2 = (PropertyManagement) is.readObject();
+		assertEquals(
+				"bar",
+				pm2.getProperty(ExtractParameters.Extract.ADAPTER_ID));
+		is.close();
 	}
 
 	@Test

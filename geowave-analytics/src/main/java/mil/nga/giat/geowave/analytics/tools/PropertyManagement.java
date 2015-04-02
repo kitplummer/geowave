@@ -1,11 +1,13 @@
 package mil.nga.giat.geowave.analytics.tools;
 
+import java.io.Serializable;
 import java.util.Properties;
 import java.util.Set;
 
 import mil.nga.giat.geowave.accumulo.mapreduce.GeoWaveJobRunner;
 import mil.nga.giat.geowave.analytics.parameters.GlobalParameters;
 import mil.nga.giat.geowave.analytics.parameters.ParameterEnum;
+import mil.nga.giat.geowave.index.ByteArrayUtils;
 import mil.nga.giat.geowave.index.sfc.data.NumericRange;
 import mil.nga.giat.geowave.store.query.DistributableQuery;
 import mil.nga.giat.geowave.store.query.SpatialQuery;
@@ -26,11 +28,18 @@ import com.vividsolutions.jts.io.WKTReader;
  * through the API (e.g. command). Allow these arguments to be placed an 'args'
  * list for 'main' executables (e.g. ToolRunner).
  * 
+ * NOTE: ConfigutationWrapper implementation is scopeless.
+ * 
  */
-public class PropertyManagement
+public class PropertyManagement implements
+		ConfigurationWrapper,
+		Serializable
 {
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = -4186468044516636362L;
 	final static Logger LOGGER = LoggerFactory.getLogger(PropertyManagement.class);
-	private final Object MUTEX = new Object();
 
 	private final Properties properties = new Properties();
 
@@ -68,46 +77,40 @@ public class PropertyManagement
 		return properties.get(toPropertyName(propertyName));
 	}
 
-	public void store(
+	public synchronized void store(
 			final ParameterEnum propertyName,
 			final Object value ) {
-		synchronized (MUTEX) {
-			properties.put(
-					toPropertyName(propertyName),
-					value);
-		}
+		properties.put(
+				toPropertyName(propertyName),
+				value);
 	}
 
-	public Object storeIfEmpty(
+	public synchronized Object storeIfEmpty(
 			final ParameterEnum propertyName,
 			final Object value ) {
 		final String pName = toPropertyName(propertyName);
-		synchronized (MUTEX) {
-			if (!properties.containsKey(pName)) {
-				LOGGER.info("Setting parameter : " + pName + " to " + value.toString());
-				properties.put(
-						pName,
-						value);
-				return value;
-			}
-
-			return properties.get(pName);
+		if (!properties.containsKey(pName)) {
+			LOGGER.info("Setting parameter : " + pName + " to " + value.toString());
+			properties.put(
+					pName,
+					value);
+			return value;
 		}
+
+		return properties.get(pName);
 	}
 
 	public synchronized void copy(
 			final ParameterEnum propertyNameFrom,
 			final ParameterEnum propertyNameTo ) {
-		synchronized (MUTEX) {
-			if (properties.containsKey(toPropertyName(propertyNameFrom))) {
-				properties.put(
-						toPropertyName(propertyNameTo),
-						properties.get(toPropertyName(propertyNameFrom)));
-			}
+		if (properties.containsKey(toPropertyName(propertyNameFrom))) {
+			properties.put(
+					toPropertyName(propertyNameTo),
+					properties.get(toPropertyName(propertyNameFrom)));
 		}
 	}
 
-	public void store(
+	public synchronized void store(
 			final ParameterEnum[] names,
 			final Object[] values ) {
 		if (values.length != names.length) {
@@ -115,48 +118,53 @@ public class PropertyManagement
 			throw new IllegalArgumentException(
 					"The number of values must equal the number of names passed to the store method");
 		}
-		synchronized (MUTEX) {
-			int i = 0;
-			for (final Object value : values) {
-				properties.put(
-						toPropertyName(names[i++]),
-						value);
-			}
+		int i = 0;
+		for (final Object value : values) {
+			properties.put(
+					toPropertyName(names[i++]),
+					value);
 		}
 	}
 
-	public Object getClassInstance(
-			final ParameterEnum property ) {
+	@SuppressWarnings("unchecked")
+	public <T> T getClassInstance(
+			final ParameterEnum property,
+			final Class<T> defaultClass )
+			throws InstantiationException {
 		final Object o = properties.get(toPropertyName(property));
-		if (o != null) {
-			try {
-				final Class<?> clazz = (o instanceof Class) ? (Class<?>) o : Class.forName(o.toString());
-				if (!property.getBaseClass().isAssignableFrom(
-						clazz)) {
-					LOGGER.error("Class for property " + toPropertyName(property) + " does not implement " + property.getBaseClass().toString());
-				}
-				return clazz.newInstance();
+
+		try {
+			final Class<?> clazz = o == null ? defaultClass : (o instanceof Class) ? (Class<?>) o : Class.forName(o.toString());
+			if (!property.getBaseClass().isAssignableFrom(
+					clazz)) {
+				LOGGER.error("Class for property " + toPropertyName(property) + " does not implement " + property.getBaseClass().toString());
 			}
-			catch (final ClassNotFoundException e) {
-				LOGGER.error(
-						"Class for property " + toPropertyName(property) + " is not found",
-						e);
-			}
-			catch (final InstantiationException e) {
-				LOGGER.error(
-						"Class for property " + toPropertyName(property) + " is not instiatable",
-						e);
-			}
-			catch (final IllegalAccessException e) {
-				LOGGER.error(
-						"Class for property " + toPropertyName(property) + " is not accessible",
-						e);
-			}
+			return (T) clazz.newInstance();
 		}
-		return null;
+		catch (final ClassNotFoundException e) {
+			LOGGER.error(
+					"Class for property " + toPropertyName(property) + " is not found",
+					e);
+			throw new InstantiationException(
+					toPropertyName(property));
+		}
+		catch (final InstantiationException e) {
+			LOGGER.error(
+					"Class for property " + toPropertyName(property) + " is not instiatable",
+					e);
+			throw new InstantiationException(
+					toPropertyName(property));
+		}
+		catch (final IllegalAccessException e) {
+			LOGGER.error(
+					"Class for property " + toPropertyName(property) + " is not accessible",
+					e);
+			throw new InstantiationException(
+					toPropertyName(property));
+		}
 	}
 
-	public boolean hasProperty(
+	public synchronized boolean hasProperty(
 			final ParameterEnum property ) {
 		return properties.getProperty(toPropertyName(property)) != null;
 	}
@@ -175,6 +183,18 @@ public class PropertyManagement
 			}
 			return new Path(
 					val.toString());
+		}
+		return null;
+	}
+
+	public byte[] getPropertyAsBytes(
+			final ParameterEnum property ) {
+		final Object val = properties.get(toPropertyName(property));
+		if (val != null) {
+			if (val instanceof byte[]) {
+				return (byte[]) val;
+			}
+			return ByteArrayUtils.byteArrayFromString(val.toString());
 		}
 		return null;
 	}
@@ -312,8 +332,8 @@ public class PropertyManagement
 
 	public <T> Class<? extends T> getPropertyAsClass(
 			final ParameterEnum property,
-			final Class<? extends T> defaultClass,
-			final Class<? extends T> iface ) {
+			final Class<? extends T> iface,
+			final Class<? extends T> defaultClass ) {
 		final Object val = properties.get(toPropertyName(property));
 		if (val != null) {
 			if (val instanceof Class) {
@@ -371,7 +391,7 @@ public class PropertyManagement
 		return null;
 	}
 
-	public String[] toArguments(
+	public synchronized String[] toArguments(
 			final ParameterEnum[] names ) {
 		final String[] resultArgs = new String[names.length];
 		int i = 0;
@@ -399,21 +419,19 @@ public class PropertyManagement
 		return toArguments(GeoWaveRunnerArguments);
 	}
 
-	public void buildFromOptions(
+	public synchronized void buildFromOptions(
 			final CommandLine commandLine )
 			throws ParseException {
-		synchronized (MUTEX) {
-			for (final Option option : commandLine.getOptions()) {
-				if (!option.hasArg()) {
-					properties.put(
-							option.getLongOpt(),
-							true);
-				}
-				else {
-					properties.put(
-							option.getLongOpt(),
-							option.getValue());
-				}
+		for (final Option option : commandLine.getOptions()) {
+			if (!option.hasArg()) {
+				properties.put(
+						option.getLongOpt(),
+						true);
+			}
+			else {
+				properties.put(
+						option.getLongOpt(),
+						option.getValue());
 			}
 		}
 	}
@@ -428,6 +446,67 @@ public class PropertyManagement
 				break;
 			}
 		}
+	}
+
+	public synchronized void storeAsBytes(
+			final ParameterEnum propertyName,
+			final byte[] value ) {
+		final String valueToStore = ByteArrayUtils.byteArrayToString(value);
+		properties.put(
+				toPropertyName(propertyName),
+				valueToStore);
+	}
+
+	@Override
+	public int getInt(
+			Enum<?> property,
+			Class<?> scope,
+			int defaultValue ) {
+		return this.getPropertyAsInt(
+				(ParameterEnum) (property),
+				defaultValue);
+	}
+
+	@Override
+	public double getDouble(
+			Enum<?> property,
+			Class<?> scope,
+			double defaultValue ) {
+		return this.getPropertyAsDouble(
+				(ParameterEnum) (property),
+				defaultValue);
+	}
+
+	@Override
+	public String getString(
+			Enum<?> property,
+			Class<?> scope,
+			String defaultValue ) {
+		return this.getProperty(
+				(ParameterEnum) (property),
+				defaultValue);
+	}
+
+	@Override
+	public <T> T getInstance(
+			Enum<?> property,
+			Class<?> scope,
+			Class<T> iface,
+			Class<? extends T> defaultValue )
+			throws InstantiationException,
+			IllegalAccessException {
+		return this.getPropertyAsClass(
+				(ParameterEnum) (property),
+				iface,
+				defaultValue).newInstance();
+	}
+
+	@Override
+	public byte[] getBytes(
+			Enum<?> property,
+			Class<?> scope ) {
+		String value = this.getProperty((ParameterEnum) (property));
+		return value != null ? ByteArrayUtils.byteArrayFromString(value) : null;
 	}
 
 }
